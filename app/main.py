@@ -4,6 +4,7 @@ import subprocess
 import os
 import json
 import time
+import signal
 
 app = Flask(__name__)
 CORS(app)
@@ -50,7 +51,8 @@ def start_bot():
             env=env,
             cwd=bot_folder,
             stdout=open(os.path.join(bot_folder, 'output.log'), 'w'),
-            stderr=subprocess.STDOUT
+            stderr=subprocess.STDOUT,
+            preexec_fn=os.setsid if os.name != 'nt' else None
         )
         
         # حفظ PID
@@ -75,8 +77,11 @@ def stop_bot(bot_id):
         if os.path.exists(pid_file):
             with open(pid_file, 'r') as f:
                 pid = int(f.read().strip())
-            # قتل العملية
-            os.kill(pid, 9)
+            # قتل العملية ومجموعتها
+            if os.name != 'nt':
+                os.killpg(os.getpgid(pid), signal.SIGTERM)
+            else:
+                os.kill(pid, 9)
             os.remove(pid_file)
             return jsonify({'status': 'stopped'})
         else:
@@ -96,7 +101,7 @@ def bot_status(bot_id):
                 pid = int(f.read().strip())
             # تحقق من وجود العملية
             try:
-                os.kill(pid, 0)  # 0 يعني فقط تحقق
+                os.kill(pid, 0)
                 return jsonify({'status': 'running'})
             except:
                 return jsonify({'status': 'stopped'})
@@ -112,7 +117,7 @@ def bot_logs(bot_id):
         log_file = os.path.join(BOTS_DIR, bot_id, 'output.log')
         if os.path.exists(log_file):
             with open(log_file, 'r') as f:
-                logs = f.read().split('\n')[-50:]  # آخر 50 سطر
+                logs = f.read().split('\n')[-50:]
             return jsonify({'logs': '\n'.join(logs)})
         else:
             return jsonify({'logs': 'لا توجد سجلات'})
@@ -123,16 +128,39 @@ def bot_logs(bot_id):
 def list_bots():
     try:
         bots = []
-        for bot_id in os.listdir(BOTS_DIR):
-            status = bot_status(bot_id).json
-            bots.append({
-                'id': bot_id,
-                'status': status.get('status', 'unknown')
-            })
+        if os.path.exists(BOTS_DIR):
+            for bot_id in os.listdir(BOTS_DIR):
+                # تحقق من أن المجلد ليس فارغاً
+                if os.path.isdir(os.path.join(BOTS_DIR, bot_id)):
+                    status_response = bot_status(bot_id)
+                    if status_response.status_code == 200:
+                        status_data = status_response.json
+                        bots.append({
+                            'id': bot_id,
+                            'status': status_data.get('status', 'unknown')
+                        })
         return jsonify({'bots': bots})
-    except:
-        return jsonify({'bots': []})
+    except Exception as e:
+        return jsonify({'bots': [], 'error': str(e)}), 500
+
+@app.route('/api/delete_bot/<bot_id>', methods=['DELETE'])
+def delete_bot(bot_id):
+    try:
+        # إيقاف البوت أولاً
+        stop_bot(bot_id)
+        
+        # حذف المجلد
+        import shutil
+        bot_folder = os.path.join(BOTS_DIR, bot_id)
+        if os.path.exists(bot_folder):
+            shutil.rmtree(bot_folder)
+            return jsonify({'status': 'deleted'})
+        else:
+            return jsonify({'status': 'not_found'}), 404
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
+    port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
