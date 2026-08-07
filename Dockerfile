@@ -11,4 +11,4 @@ RUN mkdir -p /app/bots
 
 ENV PORT=10000
 
-CMD ["python", "app/main.py"]
+CMD ["python", "main.py"]
